@@ -20,8 +20,9 @@ const unsigned int GAMEPAD_PIN[2] = { 0, 1 }; // analog pins for the gamepad
 static unsigned long JOYSTICK_ZERO[2];
 #define JOYSTICK_MAX 0
 #define JOYSTICK_THRESHOLD 5
-static unsigned long MAX_SPEED = 1000;
+const float MAX_SPEED = 2.2352; // m/s = 5 mph
 const long GAMEPAD_NORMAL_MAX = 1000;
+const unsigned int SAME_SAME_THRESHOLD = GAMEPAD_NORMAL_MAX / 10;
 
 // Servo constants. When measured, the left throttle was able to move a lot less than the
 // right. We are still debugging this. For now, we are setting the range or motion to be
@@ -33,11 +34,28 @@ const unsigned long THROTTLE_MAX[2] = { 40, 30 };
 #define SERVO_MIN THROTTLE_MIN
 #define SERVO_MAX THROTTLE_MAX
 const unsigned int GAS_PIN[2] = { 9, 10 };
+const unsigned long GAS_ENGAGE = 6 * (GAMEPAD_NORMAL_MAX / 10);
 
 // Brakes constants
 const int BRAKE_HOLD_PIN[2] = { 5, 4 }; // PURPLE
 const int BRAKE_PULL_PIN[2] = { 7, 6 }; // PURPLE
 #define BRAKE_PULL_DURATION 75 // ms
+
+// Wheel speed sensor constants
+const int WHEEL_SPEED_PIN[2] = { 2, 3 };
+const float WHEEL_DIAMETER = 0.1524; // meters
+const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER;
+const int CLICKS_PER_REVOLUTION = 180;
+const float METERS_PER_CLICK = WHEEL_CIRCUMFERENCE / CLICKS_PER_REVOLUTION;
+const float ALPHA = 0.1;
+
+// PID control
+struct PID {
+  float p;
+  float i;
+  float d;
+};
+const PID K = { 0.5, 0.1, 0.01 };
 
 // Servos
 Servo gas_pedal[2];
@@ -47,6 +65,7 @@ void setup() {
   debug({ Serial.begin(9600); });
 
   initializeGamePad();
+  initializeWheelSpeedSensors();
   initializeThrottle();
   initializeBrakes();
 }
@@ -56,12 +75,14 @@ void initializeGamePad() {
   for (int side = LEFT; side <= RIGHT; side++) {
     JOYSTICK_ZERO[side] = getGamepadPosition(side);
     long speed = JOYSTICK_ZERO[side] - JOYSTICK_MAX;
-    if (speed < MAX_SPEED) {
-      MAX_SPEED = speed;
-    }
     //debug({ Serial.print("JOYSTICK_ZERO["); Serial.print(side); Serial.print("]: "); Serial.println(JOYSTICK_ZERO[side]); });
   }
   //debug({ Serial.print("MAX_SPEED: "); Serial.println(MAX_SPEED); });
+}
+
+void initializeWheelSpeedSensors() {
+  attachInterrupt(digitalPinToInterrupt(WHEEL_SPEED_PIN[LEFT]), clickLeft, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(WHEEL_SPEED_PIN[RIGHT]), clickRight, CHANGE);
 }
 
 void initializeThrottle() {
@@ -88,12 +109,15 @@ long getGamepadPosition(int side) {
 }
 
 void loop() {
+  float throttle[2];
+  getThrottlePID(throttle);
   for (int side = LEFT; side <= RIGHT; side++) {
-    long gamepad_position = getGamepadNormal(side);
-    debug({Serial.print("side=");Serial.print(side);Serial.print("pos=");Serial.print(gamepad_position);Serial.print("\n");});
+    //long gamepad_position = getGamepadNormal(side);
+    //debug({Serial.print("side=");Serial.print(side);Serial.print("pos=");Serial.print(gamepad_position);Serial.print("\n");});
     //long desired_speed = getDesiredSpeed(side);
-    setThrottle(side, gamepad_position);
-    setBrakes(side, gamepad_position);
+    //setThrottle(side, gamepad_position);
+    //setBrakes(side, gamepad_position);
+    setThrottlePID(side, throttle[side]);
   }
 
   // Wait for the next throttle update
@@ -106,7 +130,7 @@ void setThrottle(int side, long gamepad_position) {
 
   // Map degrees to pulse length
   long gas_engage = 6 * (GAMEPAD_NORMAL_MAX / 10);
-  Serial.print (gas_engage);
+  //Serial.print (gas_engage);
   long position = constrain(
                     map(gamepad_position,
                         gas_engage, GAMEPAD_NORMAL_MAX,
@@ -114,12 +138,24 @@ void setThrottle(int side, long gamepad_position) {
                     0,//SERVO_MIN[side],
                     180//SERVO_MAX[side]
                   );
-  Serial.print(",");
-  Serial.print(position);
-  Serial.print("\n");
+  //Serial.print(",");
+  //Serial.print(position);
+  //Serial.print("\n");
   //debug({ Serial.print(side); Serial.print(": setting pulse length to "); Serial.println(position); });
 
   // Set the throttle
+  gas_pedal[side].write(position);
+}
+
+// Set the throttle according to the PID signal
+// The PID signal should be in range 0-MAX_SPEED
+// And we want to map that to servo positions
+void setThrottlePID (int side, float throttle) {
+  long position = constrain(
+    map(1000 * throttle, 0, 1000 * MAX_SPEED, THROTTLE_MIN[side], THROTTLE_MAX[side]),
+    0,
+    180
+  );
   gas_pedal[side].write(position);
 }
 
@@ -145,5 +181,77 @@ void setBrakes(int side, long gamepad_position) {
 long getGamepadNormal (int side) {
   long gamepad_position = getGamepadPosition(side);
   return map(gamepad_position, 0, 2 * JOYSTICK_ZERO[side], GAMEPAD_NORMAL_MAX, 0);
+}
+
+// Use PID control to determine the throttle signal
+void getThrottlePID (float *throttle) {
+  static float previous_error[2] = { 0, 0 };
+  static float integral[2] = { 0, 0 };
+
+  // Determine the game pad positions
+  long gamepad_position[2];
+  for (int side = LEFT; side <= RIGHT; side++) {
+    gamepad_position[side] = getGamepadNormal(side);
+    if (gamepad_position[side] <= GAS_ENGAGE) {
+      gamepad_position[side] = 0;
+    }
+  }
+
+  // If the game pad positions are close, make them the same
+  long diff = gamepad_position[LEFT] - gamepad_position[RIGHT];
+  if (abs(diff) <= SAME_SAME_THRESHOLD) {
+    if (diff > 0) {
+      gamepad_position[RIGHT] = gamepad_position[LEFT];
+    }
+    else {
+      gamepad_position[LEFT] = gamepad_position[RIGHT];
+    }
+  }
+
+  for (int side = LEFT; side <= RIGHT; side++) {
+    // The set point is our desired speed
+    float set_point = MAX_SPEED * (gamepad_position[side] - GAS_ENGAGE) / (float)(GAMEPAD_NORMAL_MAX - GAS_ENGAGE);
+
+    // The error is our desired speed minus our actual speed
+    float error = set_point - getActualSpeed(side);
+
+    // The integral is error * dt = error / refresh_rate
+    integral[side] += error / (float)REFRESH_RATE;
+
+    // The derivative is (error - previous_error) / dt = (error - previous_error) * refresh_rate
+    float derivative = (error - previous_error[side]) * (float)REFRESH_RATE;
+
+    // And PID is pretty straightforward
+    throttle[side] = K.p * error + K.i * integral[side] + K.d * derivative;
+
+    // Save the current error for next iteration
+    previous_error[side] = error;
+  }
+
+  return;
+}
+
+// Keep track of the number of clicks on the wheel
+volatile unsigned long n_clicks[2] = { 0, 0 };
+void clickLeft() {
+  n_clicks[LEFT]++;
+}
+void clickRight() {
+  n_clicks[RIGHT]++;
+}
+
+// Compute the current speed using an exponentially decaying weighted average
+float getActualSpeed (int side) {
+  static float floating_average[2] = { 0, 0 };
+  static boolean initialized[2] = { false, false };
+  float current_speed = n_clicks[side] * METERS_PER_CLICK * REFRESH_RATE;
+  n_clicks[side] = 0;
+  if (initialized[side]) {
+    floating_average[side] = ALPHA * current_speed + (1 - ALPHA) * floating_average[side];
+  }
+  else {
+    floating_average[side] = current_speed;
+    initialized[side] = true;
+  }
 }
 
