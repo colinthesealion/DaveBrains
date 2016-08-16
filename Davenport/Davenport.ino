@@ -36,16 +36,11 @@ const unsigned long THROTTLE_MAX[2] = { 40, 30 };
 const unsigned int GAS_PIN[2] = { 9, 10 };
 const unsigned long GAS_ENGAGE = 6 * (GAMEPAD_NORMAL_MAX / 10);
 
-// Brakes constants
-const int BRAKE_HOLD_PIN[2] = { 5, 4 }; // PURPLE
-const int BRAKE_PULL_PIN[2] = { 7, 6 }; // PURPLE
-#define BRAKE_PULL_DURATION 75 // ms
-
 // Wheel speed sensor constants
 const int WHEEL_SPEED_PIN[2] = { 2, 3 };
 const float WHEEL_DIAMETER = 0.1524; // meters
 const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER;
-const int CLICKS_PER_REVOLUTION = 180;
+const int CLICKS_PER_REVOLUTION = 40;
 const float METERS_PER_CLICK = WHEEL_CIRCUMFERENCE / CLICKS_PER_REVOLUTION;
 const float ALPHA = 0.1;
 
@@ -62,12 +57,11 @@ Servo gas_pedal[2];
 
 void setup() {
   // put your setup code here, to run once:
-  debug({ Serial.begin(9600); });
+  Serial.begin(115200);
 
   initializeGamePad();
   initializeWheelSpeedSensors();
   initializeThrottle();
-  initializeBrakes();
 }
 
 void initializeGamePad() {
@@ -75,9 +69,7 @@ void initializeGamePad() {
   for (int side = LEFT; side <= RIGHT; side++) {
     JOYSTICK_ZERO[side] = getGamepadPosition(side);
     long speed = JOYSTICK_ZERO[side] - JOYSTICK_MAX;
-    //debug({ Serial.print("JOYSTICK_ZERO["); Serial.print(side); Serial.print("]: "); Serial.println(JOYSTICK_ZERO[side]); });
   }
-  //debug({ Serial.print("MAX_SPEED: "); Serial.println(MAX_SPEED); });
 }
 
 void initializeWheelSpeedSensors() {
@@ -89,34 +81,31 @@ void initializeThrottle() {
   // Start the servo shield
   for (int i = LEFT; i <= RIGHT; i++) {
     gas_pedal[i].attach(GAS_PIN[i]);
-    setThrottle(i, 0);
+    setThrottlePID(i, 0);
   }
 }
 
-void initializeBrakes() {
-  // Setup brake pins
-  for (int side = LEFT; side <= RIGHT; side++) {
-    pinMode(BRAKE_PULL_PIN[side],  OUTPUT);
-    digitalWrite(BRAKE_PULL_PIN[side], HIGH);
-    pinMode(BRAKE_HOLD_PIN[side], OUTPUT);
-    digitalWrite(BRAKE_HOLD_PIN[side], HIGH);
-  }
+void logSerial(String log_line) {
+  Serial.print(millis());  
+  Serial.print(" ");
+  Serial.print(log_line);
 }
 
 long getGamepadPosition(int side) {
   long gamepad_position = analogRead(GAMEPAD_PIN[side]);
+  String log_line = "";
+  log_line.concat((side == LEFT) ? "L" : "R");
+  log_line.concat("GP ");
+  log_line.concat(gamepad_position);
+  logSerial(log_line);
   return gamepad_position;
 }
 
 void loop() {
+  maybeLogConstants();
   float throttle[2];
   getThrottlePID(throttle);
   for (int side = LEFT; side <= RIGHT; side++) {
-    //long gamepad_position = getGamepadNormal(side);
-    //debug({Serial.print("side=");Serial.print(side);Serial.print("pos=");Serial.print(gamepad_position);Serial.print("\n");});
-    //long desired_speed = getDesiredSpeed(side);
-    //setThrottle(side, gamepad_position);
-    //setBrakes(side, gamepad_position);
     setThrottlePID(side, throttle[side]);
   }
 
@@ -124,54 +113,37 @@ void loop() {
   delay(1000 / REFRESH_RATE);
 }
 
-// Set the throttle
-void setThrottle(int side, long gamepad_position) {
-  //debug({ Serial.print(side); Serial.print(": setting throttle to "); Serial.println(speed); });
-
-  // Map degrees to pulse length
-  long gas_engage = 6 * (GAMEPAD_NORMAL_MAX / 10);
-  //Serial.print (gas_engage);
-  long position = constrain(
-                    map(gamepad_position,
-                        gas_engage, GAMEPAD_NORMAL_MAX,
-                        THROTTLE_MIN[side], THROTTLE_MAX[side]),
-                    0,//SERVO_MIN[side],
-                    180//SERVO_MAX[side]
-                  );
-  //Serial.print(",");
-  //Serial.print(position);
-  //Serial.print("\n");
-  //debug({ Serial.print(side); Serial.print(": setting pulse length to "); Serial.println(position); });
-
-  // Set the throttle
-  gas_pedal[side].write(position);
+void maybeLogConstants() {
+  if (random(100) < 10) {
+    String log_line = "";
+    log_line.concat("C ");
+    log_line.concat(" "); log_line.concat(SAME_SAME_THRESHOLD);
+    log_line.concat(" "); log_line.concat(ALPHA);
+    log_line.concat(" "); log_line.concat(K.p);
+    log_line.concat(" "); log_line.concat(K.i);
+    log_line.concat(" "); log_line.concat(K.d);
+    logSerial(log_line);
+  }
 }
 
 // Set the throttle according to the PID signal
 // The PID signal should be in range 0-MAX_SPEED
 // And we want to map that to servo positions
 void setThrottlePID (int side, float throttle) {
+  if (throttle < 0) {
+    throttle = 0;
+  }
   long position = constrain(
     map(1000 * throttle, 0, 1000 * MAX_SPEED, THROTTLE_MIN[side], THROTTLE_MAX[side]),
-    0,
-    180
+    THROTTLE_MIN[side],
+    THROTTLE_MAX[side]
   );
   gas_pedal[side].write(position);
-}
-
-// Engage the brakes
-void setBrakes(int side, long gamepad_position) {
-  // The relay board takes LOW to mean ON, HIGH to mean OFF
-  //debug({ Serial.print("setBrakes["); Serial.print(side); Serial.print("]: "); Serial.println(on ? "On" : "Off"); });
-  bool on = gamepad_position < 3 * (GAMEPAD_NORMAL_MAX / 10);
-  digitalWrite(BRAKE_HOLD_PIN[side], on ? LOW : HIGH);
-  static bool brakes_engaged[2] = { false, false };
-  if (on && !brakes_engaged[side]) {
-    digitalWrite(BRAKE_PULL_PIN[side], LOW);
-    delay(BRAKE_PULL_DURATION);
-    digitalWrite(BRAKE_PULL_PIN[side], HIGH);
-  }
-  brakes_engaged[side] = on;
+  String log_line = "";
+  log_line.concat((side == LEFT) ? "L" : "R");
+  log_line.concat("ST ");
+  log_line.concat(position);
+  logSerial(log_line);
 }
 
 // Mapping the individual controllers with their own resting state values to
@@ -180,7 +152,12 @@ void setBrakes(int side, long gamepad_position) {
 // so that GAMEPAD_NORMAL_MAX is always full throttle and 0 is brake.
 long getGamepadNormal (int side) {
   long gamepad_position = getGamepadPosition(side);
-  return map(gamepad_position, 0, 2 * JOYSTICK_ZERO[side], GAMEPAD_NORMAL_MAX, 0);
+  long gamepad_position_normal = map(gamepad_position, 0, 2 * JOYSTICK_ZERO[side], GAMEPAD_NORMAL_MAX, 0);
+  String log_line = "";
+  log_line.concat((side == LEFT) ? "L" : "R");
+  log_line.concat("GPN ");
+  log_line.concat(gamepad_position_normal);
+  logSerial(log_line);
 }
 
 // Use PID control to determine the throttle signal
@@ -224,6 +201,12 @@ void getThrottlePID (float *throttle) {
     // And PID is pretty straightforward
     throttle[side] = K.p * error + K.i * integral[side] + K.d * derivative;
 
+    String log_line = "";
+    log_line.concat((side == LEFT) ? "L" : "R");
+    log_line.concat("GT ");
+    log_line.concat(throttle[side]);
+    logSerial(log_line);
+
     // Save the current error for next iteration
     previous_error[side] = error;
   }
@@ -244,8 +227,9 @@ void clickRight() {
 float getActualSpeed (int side) {
   static float floating_average[2] = { 0, 0 };
   static boolean initialized[2] = { false, false };
-  float current_speed = n_clicks[side] * METERS_PER_CLICK * REFRESH_RATE;
+  unsigned long previous_n_clicks = n_clicks[side];
   n_clicks[side] = 0;
+  float current_speed = previous_n_clicks * METERS_PER_CLICK * REFRESH_RATE;
   if (initialized[side]) {
     floating_average[side] = ALPHA * current_speed + (1 - ALPHA) * floating_average[side];
   }
@@ -253,5 +237,15 @@ float getActualSpeed (int side) {
     floating_average[side] = current_speed;
     initialized[side] = true;
   }
+
+  String log_line = "";
+  log_line.concat((side == LEFT) ? "L" : "R");
+  log_line.concat("V ");
+  log_line.concat(previous_n_clicks);
+  log_line.concat(" ");
+  log_line.concat(current_speed);
+  log_line.concat(" ");
+  log_line.concat(floating_average[side]);
+  logSerial(log_line);
 }
 
