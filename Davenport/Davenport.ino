@@ -94,8 +94,8 @@ void logSerial(String log_line) {
 long getGamepadPosition(int side) {
   long gamepad_position = analogRead(GAMEPAD_PIN[side]);
   String log_line = "";
-  log_line.concat((side == LEFT) ? "L" : "R");
   log_line.concat("GP ");
+  log_line.concat((side == LEFT) ? "L " : "R ");
   log_line.concat(gamepad_position);
   logSerial(log_line);
   return gamepad_position;
@@ -140,8 +140,8 @@ void setThrottlePID (int side, float throttle) {
   );
   gas_pedal[side].write(position);
   String log_line = "";
-  log_line.concat((side == LEFT) ? "L" : "R");
   log_line.concat("ST ");
+  log_line.concat((side == LEFT) ? "L " : "R ");
   log_line.concat(position);
   logSerial(log_line);
 }
@@ -154,8 +154,8 @@ long getGamepadNormal (int side) {
   long gamepad_position = getGamepadPosition(side);
   long gamepad_position_normal = map(gamepad_position, 0, 2 * JOYSTICK_ZERO[side], GAMEPAD_NORMAL_MAX, 0);
   String log_line = "";
-  log_line.concat((side == LEFT) ? "L" : "R");
   log_line.concat("GPN ");
+  log_line.concat((side == LEFT) ? "L " : "R ");
   log_line.concat(gamepad_position_normal);
   logSerial(log_line);
 }
@@ -191,6 +191,11 @@ void getThrottlePID (float *throttle) {
 
     // The error is our desired speed minus our actual speed
     float error = set_point - getActualSpeed(side);
+    String log_line = "";
+    log_line.concat("E ");
+    log_line.concat((side == LEFT) ? "L " : "R ");
+    log_line.concat(error);
+    logSerial(log_line);
 
     // The integral is error * dt = error / refresh_rate
     integral[side] += error / (float)REFRESH_RATE;
@@ -201,9 +206,9 @@ void getThrottlePID (float *throttle) {
     // And PID is pretty straightforward
     throttle[side] = K.p * error + K.i * integral[side] + K.d * derivative;
 
-    String log_line = "";
-    log_line.concat((side == LEFT) ? "L" : "R");
+    log_line = "";
     log_line.concat("GT ");
+    log_line.concat((side == LEFT) ? "L " : "R ");
     log_line.concat(throttle[side]);
     logSerial(log_line);
 
@@ -239,8 +244,8 @@ float getActualSpeed (int side) {
   }
 
   String log_line = "";
-  log_line.concat((side == LEFT) ? "L" : "R");
   log_line.concat("V ");
+  log_line.concat((side == LEFT) ? "L " : "R ");
   log_line.concat(previous_n_clicks);
   log_line.concat(" ");
   log_line.concat(current_speed);
