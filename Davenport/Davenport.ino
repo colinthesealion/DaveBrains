@@ -50,7 +50,7 @@ struct PID {
   float i;
   float d;
 };
-const PID K = { 0.5, 0.1, 0.01 };
+const PID K = { 1, 0.1, 0.01 };
 
 // Servos
 Servo gas_pedal[2];
@@ -88,7 +88,7 @@ void initializeThrottle() {
 void logSerial(String log_line) {
   Serial.print(millis());  
   Serial.print(" ");
-  Serial.print(log_line);
+  Serial.println(log_line);
 }
 
 long getGamepadPosition(int side) {
@@ -158,6 +158,7 @@ long getGamepadNormal (int side) {
   log_line.concat((side == LEFT) ? "L " : "R ");
   log_line.concat(gamepad_position_normal);
   logSerial(log_line);
+  return gamepad_position_normal;
 }
 
 // Use PID control to determine the throttle signal
@@ -187,7 +188,13 @@ void getThrottlePID (float *throttle) {
 
   for (int side = LEFT; side <= RIGHT; side++) {
     // The set point is our desired speed
-    float set_point = MAX_SPEED * (gamepad_position[side] - GAS_ENGAGE) / (float)(GAMEPAD_NORMAL_MAX - GAS_ENGAGE);
+    float set_point;
+    if (gamepad_position[side] >= GAS_ENGAGE) {
+      set_point = MAX_SPEED * (float)gamepad_position[side] / (float)GAMEPAD_NORMAL_MAX;
+    }
+    else {
+      set_point = 0;
+    }
 
     // The error is our desired speed minus our actual speed
     float error = set_point - getActualSpeed(side);
